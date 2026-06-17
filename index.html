@@ -145,6 +145,13 @@
     }
     .train-file-chip .cnt { color: var(--muted); font-size: .7rem; }
     .train-file-chip .btn { padding: .15rem .4rem; font-size: .68rem; }
+    .toolbar select, .kw-add-row input {
+      font-family: inherit; font-size: .78rem; padding: .32rem .55rem; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--surface-deep); color: var(--text); outline: none;
+    }
+    .toolbar select { cursor: pointer; }
+    .kw-add-row { display: flex; flex-wrap: wrap; gap: .45rem; margin-bottom: .75rem; align-items: center; }
+    .kw-add-row input { flex: 1; min-width: 120px; }
   </style>
 </head>
 <body>
@@ -185,8 +192,17 @@
         <button type="button" class="btn" id="btnClear">清空</button>
         <button type="button" class="btn btn-success" id="btnCopyZhStd">复制 中文+英文字段</button>
         <button type="button" class="btn btn-success" id="btnCopyFull">复制全部</button>
+        <label class="toggle-row">字段分割
+          <select id="splitMode">
+            <option value="line" selected>换行</option>
+            <option value="comma">逗号</option>
+            <option value="dun">顿号</option>
+            <option value="space">空格</option>
+            <option value="tab">Tab</option>
+            <option value="all">全部</option>
+          </select>
+        </label>
         <label class="toggle-row"><input type="checkbox" id="onlineSearch" checked /> 词库未收录时联网翻译（不写入词库）</label>
-        <span class="toolbar-hint">分隔符：换行 / 逗号 / 顿号 / 空格 / Tab</span>
       </div>
 
       <div class="main-grid">
@@ -283,8 +299,13 @@
             <button type="button" class="btn" id="btnKwReset">重置</button>
           </div>
           <div class="kw-grid" id="kwGrid"></div>
+          <div class="kw-add-row">
+            <input type="text" id="kwAddZh" placeholder="中文，如 表单" />
+            <input type="text" id="kwAddEn" placeholder="英文，如 form" />
+            <button type="button" class="btn btn-accent" id="btnKwAdd">添加词条</button>
+          </div>
           <div class="import-box">
-            <p>支持导入 JSON 扩展词库。转换输入不会自动写入词库；仅「命名训练」导入的数据会持久学习。</p>
+            <p>支持逐条添加词条（如 <code>表单</code> → <code>form</code>），或导入 JSON 批量扩展词库。转换输入不会自动写入词库。</p>
             <div class="import-actions">
               <label class="btn"><input type="file" id="kwImport" accept=".json" />导入 JSON</label>
               <button type="button" class="btn" id="btnExportKw">导出词库</button>
@@ -408,6 +429,7 @@
     const LS_TRAINING = "field-namer-training";
     const LS_KW_URL = "field-namer-kw-url";
     const LS_THEME = "field-namer-theme";
+    const LS_SPLIT = "field-namer-split-mode";
     const LS_VER = "field-namer-ver";
     const DICT_VERSION = "4";
 
@@ -531,8 +553,26 @@
     }
 
     /** 分隔符不穿透括号，避免 (1:有效,0:无效) 被逗号拆断 */
-    function splitFields(text) {
+    function isSplitDelim(ch, stack, mode) {
+      if (stack.length) return false;
+      switch (mode) {
+        case "comma": return /[,，]/.test(ch);
+        case "dun": return /、/.test(ch);
+        case "space": return /\s/.test(ch);
+        case "tab": return /\t/.test(ch);
+        case "all": return /[\r\n,，、\t]/.test(ch) || /\s/.test(ch);
+        case "line":
+        default: return /[\r\n]/.test(ch);
+      }
+    }
+
+    function getSplitMode() {
+      return document.getElementById("splitMode")?.value || localStorage.getItem(LS_SPLIT) || "line";
+    }
+
+    function splitFields(text, mode) {
       if (!text || !text.trim()) return [];
+      mode = mode || getSplitMode();
       const results = [];
       let buf = "";
       const stack = [];
@@ -544,10 +584,7 @@
         } else if (PAREN_CLOSE.has(ch)) {
           if (stack.length && PAREN_OPEN[stack[stack.length - 1]] === ch) stack.pop();
           buf += ch;
-        } else if (!stack.length && /[\r\n,，、\t]/.test(ch)) {
-          if (buf.trim()) results.push(buf.trim());
-          buf = "";
-        } else if (!stack.length && /\s/.test(ch)) {
+        } else if (isSplitDelim(ch, stack, mode)) {
           if (buf.trim()) results.push(buf.trim());
           buf = "";
         } else {
@@ -931,6 +968,23 @@
       if (!silent) { showToast(`词库已更新`); scheduleConvert(); }
     }
 
+    function addKeywordEntry(zh, en) {
+      zh = String(zh ?? "").trim();
+      en = normalizeFieldName(en);
+      if (!zh) { showToast("请输入中文"); return false; }
+      if (!en) { showToast("请输入英文"); return false; }
+      if (!isChineseText(zh)) { showToast("中文词需包含汉字"); return false; }
+      if (!isFieldName(en)) { showToast("英文需为小写字母、数字、下划线"); return false; }
+      const existed = customKw[zh] !== undefined || BUILTIN_KEYWORDS[zh] !== undefined;
+      customKw[zh] = en;
+      saveCustomKeywords();
+      rebuildKeywords();
+      renderKwGrid(document.getElementById("kwSearch").value);
+      scheduleConvert();
+      showToast(existed ? `已更新：${zh} → ${en}` : `已添加：${zh} → ${en}`);
+      return true;
+    }
+
     function genId() {
       return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     }
@@ -1286,9 +1340,28 @@
       sel.removeAllRanges(); sel.addRange(range);
     });
 
+    document.getElementById("splitMode").addEventListener("change", e => {
+      localStorage.setItem(LS_SPLIT, e.target.value);
+      scheduleConvert();
+    });
+
     document.getElementById("kwSearch").addEventListener("input", e => renderKwGrid(e.target.value));
     document.getElementById("btnKwReset").addEventListener("click", () => {
       document.getElementById("kwSearch").value = ""; renderKwGrid();
+    });
+    document.getElementById("btnKwAdd").addEventListener("click", () => {
+      const zhEl = document.getElementById("kwAddZh");
+      const enEl = document.getElementById("kwAddEn");
+      if (addKeywordEntry(zhEl.value, enEl.value)) {
+        zhEl.value = "";
+        enEl.value = "";
+        zhEl.focus();
+      }
+    });
+    ["kwAddZh", "kwAddEn"].forEach(id => {
+      document.getElementById(id).addEventListener("keydown", e => {
+        if (e.key === "Enter") document.getElementById("btnKwAdd").click();
+      });
     });
     document.getElementById("kwImport").addEventListener("change", e => {
       const file = e.target.files[0]; if (!file) return;
@@ -1352,6 +1425,8 @@
     fetch("keywords.json").then(r => r.ok ? r.json() : null).then(data => {
       if (data?.entries) mergeKeywords(data, true);
     }).finally(() => {
+      const savedSplit = localStorage.getItem(LS_SPLIT);
+      if (savedSplit) document.getElementById("splitMode").value = savedSplit;
       renderKwGrid();
       renderTrainingList();
       renderTrainingFileList();
