@@ -167,7 +167,8 @@
         <ul>
           <li>遵循<strong>中英文直译</strong>，优先匹配<a class="link" href="#" id="kwLibLink">关键词库</a>与<strong>命名训练</strong>数据；未命中词库时不逐字硬译</li>
           <li><strong>英文直译</strong>：联网整句翻译，词间空格、无下划线；<strong>英文字段</strong>：词库分词拼接 snake_case，并做标准化（如 <code>is_delete</code> → <code>is_delete_flag</code>）</li>
-          <li>可在「命名训练」页导入 Excel/CSV 两列对照表进行学习</li>
+          <li>括号内注释/枚举说明自动跳过，不参与标准化与训练匹配，如 <code>是否有效订单(1:有效,0:无效)</code> → <code>是否有效订单</code></li>
+          <li>可在「命名训练」页导入 Excel/CSV 两列对照表；导入时同样自动剥离括号内容</li>
         </ul>
         <div class="examples" id="exampleChips"></div>
       </div>
@@ -511,20 +512,52 @@
       else localStorage.removeItem(LS_KEY);
     }
 
-    function splitFields(text) {
-      if (!text || !text.trim()) return [];
-      return text.split(/[\r\n,，、\t]+|\s+/).map(s => s.trim()).filter(Boolean);
+    const PAREN_OPEN = { "(": ")", "（": "）", "[": "]", "【": "】" };
+    const PAREN_CLOSE = new Set(Object.values(PAREN_OPEN));
+
+    /** 括号内不参与分词/标准化/训练匹配，如 (1:有效,0:无效)、（备注） */
+    function stripParenContent(text) {
+      let s = String(text ?? "").trim();
+      let prev;
+      do {
+        prev = s;
+        s = s
+          .replace(/\([^)]*\)/g, "")
+          .replace(/（[^）]*）/g, "")
+          .replace(/\[[^\]]*\]/g, "")
+          .replace(/【[^】]*】/g, "")
+          .replace(/\s+/g, "")
+          .trim();
+      } while (s !== prev);
+      return s;
     }
 
-    /** 翻译/训练时跳过括号内注释：（备注）、(note)、【说明】等 */
-    function stripParenContent(text) {
-      return String(text ?? "").trim()
-        .replace(/\([^)]*\)/g, "")
-        .replace(/（[^）]*）/g, "")
-        .replace(/\[[^\]]*\]/g, "")
-        .replace(/【[^】]*】/g, "")
-        .replace(/\s+/g, "")
-        .trim();
+    /** 分隔符不穿透括号，避免 (1:有效,0:无效) 被逗号拆断 */
+    function splitFields(text) {
+      if (!text || !text.trim()) return [];
+      const results = [];
+      let buf = "";
+      const stack = [];
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (PAREN_OPEN[ch]) {
+          stack.push(ch);
+          buf += ch;
+        } else if (PAREN_CLOSE.has(ch)) {
+          if (stack.length && PAREN_OPEN[stack[stack.length - 1]] === ch) stack.pop();
+          buf += ch;
+        } else if (!stack.length && /[\r\n,，、\t]/.test(ch)) {
+          if (buf.trim()) results.push(buf.trim());
+          buf = "";
+        } else if (!stack.length && /\s/.test(ch)) {
+          if (buf.trim()) results.push(buf.trim());
+          buf = "";
+        } else {
+          buf += ch;
+        }
+      }
+      if (buf.trim()) results.push(buf.trim());
+      return results;
     }
 
     function tokenizeInput(text) {
@@ -648,7 +681,7 @@
 
     function validateField(en, zhInput, pending, fromTraining, skippedParen) {
       const warnings = [];
-      if (skippedParen) warnings.push({ level:"info", msg:"已跳过括号内注释" });
+      if (skippedParen) warnings.push({ level:"info", msg:`已跳过括号内内容，有效字段名：${stripParenContent(zhInput)}` });
       if (fromTraining) warnings.push({ level:"info", msg:"命中训练库" });
       if (pending.length) {
         const chunks = pending.map(s => `「${s.zh}」`).join("");
