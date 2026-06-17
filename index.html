@@ -64,16 +64,6 @@
       padding: .9rem 1rem; color: var(--text);
     }
     textarea::placeholder { color: var(--placeholder); opacity: 0.75; }
-    #inputText:placeholder-shown { color: var(--text); }
-    #inputText:placeholder-shown:not(:focus) {
-      background-image: repeating-linear-gradient(
-        to bottom,
-        transparent,
-        transparent 1.55rem,
-        color-mix(in srgb, var(--border) 55%, transparent) 1.55rem,
-        color-mix(in srgb, var(--border) 55%, transparent) calc(1.55rem + 1px)
-      );
-    }
     .out-area { overflow: auto; white-space: pre-wrap; word-break: break-all; cursor: text; user-select: text; }
     .out-area.std:not(.ghost) { color: var(--positive); }
     .out-area.lit:not(.ghost) { color: var(--literal); }
