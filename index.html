@@ -166,7 +166,7 @@
       <div class="rules-body">
         <ul>
           <li>遵循<strong>中英文直译</strong>，优先匹配<a class="link" href="#" id="kwLibLink">关键词库</a>与<strong>命名训练</strong>数据；未命中词库时不逐字硬译</li>
-          <li><strong>英文直译</strong>：逐词拼接，不加后缀；<strong>英文字段</strong>：在直译基础上做标准化（如 <code>is_delete</code> → <code>is_delete_flag</code>）</li>
+          <li><strong>英文直译</strong>：联网整句翻译，词间空格、无下划线；<strong>英文字段</strong>：词库分词拼接 snake_case，并做标准化（如 <code>is_delete</code> → <code>is_delete_flag</code>）</li>
           <li>可在「命名训练」页导入 Excel/CSV 两列对照表进行学习</li>
         </ul>
         <div class="examples" id="exampleChips"></div>
@@ -197,7 +197,7 @@
             <button type="button" class="btn col-copy" data-copy="zh">复制</button>
           </div>
           <div class="col-body">
-            <textarea id="inputText" placeholder="什么值得买ID"></textarea>
+            <textarea id="inputText" placeholder="输入中文字段名称，如【什么值得买ID】"></textarea>
           </div>
         </div>
         <div class="col-panel">
@@ -206,16 +206,16 @@
             <button type="button" class="btn col-copy" data-copy="std">复制</button>
           </div>
           <div class="col-body">
-            <div class="out-area std ghost empty" id="outputStd" tabindex="0">smzdm_id</div>
+            <div class="out-area std ghost empty" id="outputStd" tabindex="0">zdm_id</div>
           </div>
         </div>
         <div class="col-panel">
           <div class="col-head">
-            <h3 class="col-title lit">英文直译（逐词直译，不加后缀）</h3>
+            <h3 class="col-title lit">英文直译（联网翻译，无下划线）</h3>
             <button type="button" class="btn col-copy" data-copy="lit">复制</button>
           </div>
           <div class="col-body">
-            <div class="out-area lit ghost empty" id="outputLit" tabindex="0">smzdm_id</div>
+            <div class="out-area lit ghost empty" id="outputLit" tabindex="0">zmd id</div>
           </div>
         </div>
       </div>
@@ -396,7 +396,7 @@
       "项目":"project"
     };
 
-    const DEMO_GHOST = { zh: "什么值得买ID", std: "smzdm_id", lit: "smzdm_id" };
+    const DEMO_GHOST = { zh: "什么值得买ID", std: "zdm_id", lit: "zmd id" };
     const VAGUE_EN = new Set(["name","id","type","status","code","num","cnt","amount","time","date"]);
     const EXAMPLES = [
       { zh:"直接GMV", en:"direct_gmv" }, { zh:"沉默评论用户数", en:"silent_comment_user_num" },
@@ -598,6 +598,15 @@
       return output;
     }
 
+    /** 英文直译：词间空格，无下划线（词库 fallback） */
+    function buildLiteralFromSegments(segments) {
+      const parts = segments.map(s => {
+        if (s.en == null || s.en === "") return null;
+        return String(s.en).replace(/_/g, " ").trim();
+      }).filter(Boolean);
+      return parts.join(" ").replace(/\s+/g, " ").trim();
+    }
+
     /** 仅标准化列：对 is_ + 裸动词 补 _flag，直译列不调用 */
     function applyNamingRules(literal) {
       if (!literal) return literal;
@@ -624,9 +633,9 @@
         else segments.push({ zh:t.raw, en:t.raw, source:"dict" });
       }
 
-      const literal = buildFromSegments(segments);
       const trainingEn = getTrainingEn(text);
-      const standardized = trainingEn ?? applyNamingRules(literal);
+      const standardized = trainingEn ?? applyNamingRules(buildFromSegments(segments));
+      const literal = buildLiteralFromSegments(segments);
       const pending = segments.filter(s => s.source === "pending");
       const fromTraining = !!trainingEn;
       const skippedParen = coreText !== text;
@@ -650,7 +659,7 @@
         });
       }
       if (!en && pending.length) warnings.push({ level:"error", msg:"暂无法生成，待补充翻译" });
-      if (en === "is_delete") warnings.push({ level:"warn", msg:"标准化建议 is_delete_flag；直译保持 is_delete" });
+      if (en === "is_delete") warnings.push({ level:"warn", msg:"标准化建议 is_delete_flag" });
       if (en && en.split("_").length === 1 && VAGUE_EN.has(en)) {
         warnings.push({ level:"warn", msg:`「${en}」过于笼统，建议加业务前缀` });
       }
@@ -675,29 +684,68 @@
       return null;
     }
 
+    async function fetchOnlineLiteral(zh) {
+      const cacheKey = "lit:" + zh;
+      if (onlineCache.has(cacheKey)) return onlineCache.get(cacheKey);
+      try {
+        const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(zh)}&langpair=zh-CN|en`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.responseData?.translatedText) {
+          const en = data.responseData.translatedText.toLowerCase()
+            .replace(/_/g, " ").replace(/\s+/g, " ").trim();
+          if (en && en !== zh.toLowerCase()) {
+            onlineCache.set(cacheKey, en);
+            return en;
+          }
+        }
+      } catch (_) {}
+      return null;
+    }
+
     async function supplementOnline(results) {
-      if (!document.getElementById("onlineSearch").checked) return results;
+      const onlineOn = document.getElementById("onlineSearch").checked;
+      if (!onlineOn) return results;
       const toFetch = new Set();
+      const literalTexts = new Set();
       for (const r of results) {
         if (!r) continue;
+        literalTexts.add(r.coreText || r.input);
         for (const s of (r.segments || [])) {
           if (s.source === "pending" && s.zh) toFetch.add(s.zh);
         }
       }
-      if (!toFetch.size) return results;
+      if (!toFetch.size && !literalTexts.size) return results;
 
       document.getElementById("onlineStatus").hidden = false;
-      onlinePending = toFetch.size;
-      await Promise.all([...toFetch].map(async zh => {
-        const en = await fetchOnlineTranslation(zh);
-        onlinePending--;
-        if (en && !/u[0-9a-f]{4,}/i.test(en)) {
-          sessionKw[zh] = en;
-          rebuildKeywords();
+      onlinePending = toFetch.size + literalTexts.size;
+
+      if (toFetch.size) {
+        await Promise.all([...toFetch].map(async zh => {
+          const en = await fetchOnlineTranslation(zh);
+          onlinePending--;
+          if (en && !/u[0-9a-f]{4,}/i.test(en)) {
+            sessionKw[zh] = en;
+            rebuildKeywords();
+          }
+          if (onlinePending <= 0) document.getElementById("onlineStatus").hidden = true;
+        }));
+        results = splitFields(document.getElementById("inputText").value).map(convertField).filter(Boolean);
+      }
+
+      if (literalTexts.size) {
+        await Promise.all([...literalTexts].map(async zh => {
+          await fetchOnlineLiteral(zh);
+          onlinePending--;
+          if (onlinePending <= 0) document.getElementById("onlineStatus").hidden = true;
+        }));
+        for (const r of results) {
+          const lit = onlineCache.get("lit:" + (r.coreText || r.input));
+          if (lit) r.literal = lit;
         }
-        if (onlinePending <= 0) document.getElementById("onlineStatus").hidden = true;
-      }));
-      return splitFields(document.getElementById("inputText").value).map(convertField).filter(Boolean);
+      }
+
+      return results;
     }
 
     function isInputEmpty() {
