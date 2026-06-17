@@ -120,11 +120,13 @@
       display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .6rem;
       padding: 2rem 1.25rem; border: 2px dashed var(--border); border-radius: var(--radius);
       background: var(--surface-deep); cursor: pointer; transition: border-color .2s, background .2s;
-      margin-bottom: 1rem;
+      margin-bottom: 1rem; position: relative; overflow: hidden;
     }
     .train-upload:hover, .train-upload.dragover { border-color: var(--accent); background: var(--accent-soft); }
-    .train-upload input { display: none; }
-    .train-upload strong { font-size: .88rem; }
+    .train-upload input {
+      position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; display: block;
+    }
+    .train-upload strong, .train-upload span { font-size: .88rem; pointer-events: none; position: relative; z-index: 1; }
     .train-upload span { font-size: .78rem; color: var(--muted); text-align: center; }
     .train-toolbar { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .75rem; align-items: center; }
     .train-table-wrap { border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; max-height: 520px; background: var(--surface); }
@@ -152,6 +154,10 @@
     .toolbar select { cursor: pointer; }
     .kw-add-row { display: flex; flex-wrap: wrap; gap: .45rem; margin-bottom: .75rem; align-items: center; }
     .kw-add-row input { flex: 1; min-width: 120px; }
+    .file-btn { position: relative; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; }
+    .file-btn input {
+      position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; display: block;
+    }
   </style>
 </head>
 <body>
@@ -190,8 +196,6 @@
     <div class="tool-panel active" id="panel-convert">
       <div class="toolbar">
         <button type="button" class="btn" id="btnClear">清空</button>
-        <button type="button" class="btn btn-success" id="btnCopyZhStd">复制 中文+英文字段</button>
-        <button type="button" class="btn btn-success" id="btnCopyFull">复制全部</button>
         <label class="toggle-row">字段分割
           <select id="splitMode">
             <option value="line" selected>换行</option>
@@ -202,6 +206,8 @@
             <option value="all">全部</option>
           </select>
         </label>
+        <button type="button" class="btn btn-success" id="btnCopyZhStd">复制 中文+英文字段</button>
+        <button type="button" class="btn btn-success" id="btnCopyFull">复制全部</button>
         <label class="toggle-row"><input type="checkbox" id="onlineSearch" checked /> 词库未收录时联网翻译（不写入词库）</label>
       </div>
 
@@ -294,20 +300,20 @@
           <span style="font-size:.75rem;color:var(--muted)" id="kwCount">0 条</span>
         </div>
         <div style="padding:1rem">
-          <div class="kw-search">
-            <input type="search" id="kwSearch" placeholder="搜索中文或英文…" />
-            <button type="button" class="btn" id="btnKwReset">重置</button>
-          </div>
-          <div class="kw-grid" id="kwGrid"></div>
           <div class="kw-add-row">
             <input type="text" id="kwAddZh" placeholder="中文，如 表单" />
             <input type="text" id="kwAddEn" placeholder="英文，如 form" />
             <button type="button" class="btn btn-accent" id="btnKwAdd">添加词条</button>
           </div>
+          <div class="kw-search">
+            <input type="search" id="kwSearch" placeholder="搜索中文或英文…" />
+            <button type="button" class="btn" id="btnKwReset">重置</button>
+          </div>
+          <div class="kw-grid" id="kwGrid"></div>
           <div class="import-box">
-            <p>支持逐条添加词条（如 <code>表单</code> → <code>form</code>），或导入 JSON 批量扩展词库。转换输入不会自动写入词库。</p>
+            <p>支持逐条添加词条，或导入 JSON / CSV / Excel（两列：中文 + 英文）。转换输入不会自动写入词库。</p>
             <div class="import-actions">
-              <label class="btn"><input type="file" id="kwImport" accept=".json" />导入 JSON</label>
+              <span class="btn file-btn">导入 JSON / CSV / Excel<input type="file" id="kwImport" accept=".json,.csv,.xlsx,.xls,.tsv" multiple /></span>
               <button type="button" class="btn" id="btnExportKw">导出词库</button>
               <button type="button" class="btn btn-danger" id="btnPurgeDirty">清除脏数据</button>
               <button type="button" class="btn" id="btnResetKw">恢复内置</button>
@@ -705,6 +711,7 @@
       let standardized = trainingEn ?? applyNamingRules(buildFromSegments(segments));
       let literal = buildLiteralFromSegments(segments);
       if (!trainingEn && hasIdSuffix(coreText)) standardized = ensureOnlineIdSuffix(coreText, standardized);
+      standardized = normalizeIdField(standardized);
       if (hasIdSuffix(coreText)) literal = ensureOnlineLiteralIdSuffix(coreText, literal);
       const pending = segments.filter(s => s.source === "pending");
       const fromTraining = !!trainingEn;
@@ -740,12 +747,22 @@
       return /(?:ID|id|Id|号)$/.test(String(zh ?? "").trim());
     }
 
+    /** 统一 id 后缀，避免 skuid_id → sku_id */
+    function normalizeIdField(en) {
+      if (!en) return en;
+      let s = sanitizeEn(en);
+      s = s.replace(/^(.+?)id_id$/i, "$1_id").replace(/_id_id+/gi, "_id");
+      return s;
+    }
+
     /** 联网翻译后：xxID / xx号 类字段自动补 _id */
     function ensureOnlineIdSuffix(zh, en) {
-      if (!en || !hasIdSuffix(zh)) return en;
+      if (!en || !hasIdSuffix(zh)) return normalizeIdField(en);
       let s = sanitizeEn(en).replace(/_(number|num|no|code)$/i, "");
-      if (!/_id$/i.test(s)) s = s ? `${s}_id` : "id";
-      return s;
+      if (/_id$/i.test(s)) return normalizeIdField(s);
+      if (/id$/i.test(s) && s.length > 2) s = s.replace(/id$/i, "_id");
+      else s = s ? `${s}_id` : "id";
+      return normalizeIdField(s);
     }
 
     /** 英文直译列：xxID / xx号 自动补 id（空格分隔） */
@@ -983,6 +1000,64 @@
       scheduleConvert();
       showToast(existed ? `已更新：${zh} → ${en}` : `已添加：${zh} → ${en}`);
       return true;
+    }
+
+    function extractKeywordPairs(rows) {
+      const cols = detectColumns(rows);
+      if (!cols) return { pairs: [], skipped: 0 };
+      const pairs = [];
+      let skipped = 0;
+      const dataRows = rows.filter(r => r.some(c => String(c ?? "").trim())).slice(cols.startRow);
+      for (const row of dataRows) {
+        const zh = stripParenContent(String(row[cols.zhCol] ?? "").trim());
+        const en = normalizeFieldName(row[cols.enCol]);
+        if (!zh || !en) { skipped++; continue; }
+        if (!isChineseText(zh)) { skipped++; continue; }
+        if (!isFieldName(en)) { skipped++; continue; }
+        pairs.push({ zh, en });
+      }
+      return { pairs, skipped };
+    }
+
+    async function handleKeywordImport(fileList) {
+      let added = 0, updated = 0, skipped = 0, fileCount = 0;
+      for (const file of fileList) {
+        try {
+          const name = file.name.toLowerCase();
+          if (name.endsWith(".json")) {
+            const text = await file.text();
+            const data = JSON.parse(text);
+            const entries = data.entries || data;
+            for (const [zh, en] of Object.entries(entries)) {
+              const z = String(zh ?? "").trim();
+              const e = normalizeFieldName(en);
+              if (!z || !e || !isChineseText(z) || !isFieldName(e)) { skipped++; continue; }
+              const had = customKw[z] !== undefined;
+              customKw[z] = e;
+              had ? updated++ : added++;
+            }
+          } else {
+            const rows = await parseSpreadsheetFile(file);
+            const { pairs, skipped: sk } = extractKeywordPairs(rows);
+            skipped += sk;
+            if (!pairs.length) continue;
+            for (const { zh, en } of pairs) {
+              const had = customKw[zh] !== undefined;
+              customKw[zh] = en;
+              had ? updated++ : added++;
+            }
+          }
+          fileCount++;
+        } catch (_) {
+          showToast(`${file.name} 解析失败`);
+        }
+      }
+      if (!fileCount) { showToast("未识别到有效词库数据"); return; }
+      saveCustomKeywords();
+      rebuildKeywords();
+      renderKwGrid(document.getElementById("kwSearch").value);
+      scheduleConvert();
+      showToast(`词库导入完成：新增 ${added}，更新 ${updated}，跳过 ${skipped}`);
     }
 
     function genId() {
@@ -1364,10 +1439,9 @@
       });
     });
     document.getElementById("kwImport").addEventListener("change", e => {
-      const file = e.target.files[0]; if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => { try { mergeKeywords(JSON.parse(reader.result)); } catch { showToast("JSON 解析失败"); } };
-      reader.readAsText(file); e.target.value = "";
+      const files = e.target.files;
+      if (files?.length) handleKeywordImport([...files]);
+      e.target.value = "";
     });
     document.getElementById("btnExportKw").addEventListener("click", () => {
       const blob = new Blob([JSON.stringify({ entries: keywords }, null, 2)], { type: "application/json" });
@@ -1392,10 +1466,6 @@
 
     const trainZone = document.getElementById("trainUploadZone");
     const trainInput = document.getElementById("trainFileInput");
-    trainZone.addEventListener("click", (e) => {
-      if (e.target === trainInput) return;
-      trainInput.click();
-    });
     trainZone.addEventListener("dragover", e => { e.preventDefault(); trainZone.classList.add("dragover"); });
     trainZone.addEventListener("dragleave", () => trainZone.classList.remove("dragover"));
     trainZone.addEventListener("drop", e => {
