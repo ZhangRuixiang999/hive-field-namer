@@ -63,11 +63,29 @@
       background: transparent; font-family: var(--mono); font-size: .84rem; line-height: 1.65;
       padding: .9rem 1rem; color: var(--text);
     }
-    textarea::placeholder { color: var(--placeholder); }
+    textarea::placeholder { color: var(--placeholder); opacity: 0.75; }
+    #inputText:placeholder-shown { color: var(--text); }
+    #inputText:placeholder-shown:not(:focus) {
+      background-image: repeating-linear-gradient(
+        to bottom,
+        transparent,
+        transparent 1.55rem,
+        color-mix(in srgb, var(--border) 55%, transparent) 1.55rem,
+        color-mix(in srgb, var(--border) 55%, transparent) calc(1.55rem + 1px)
+      );
+    }
     .out-area { overflow: auto; white-space: pre-wrap; word-break: break-all; cursor: text; user-select: text; }
-    .out-area.std { color: var(--positive); }
-    .out-area.lit { color: var(--literal); }
-    .out-area.empty { color: var(--placeholder); font-style: italic; }
+    .out-area.std:not(.ghost) { color: var(--positive); }
+    .out-area.lit:not(.ghost) { color: var(--literal); }
+    .out-area.ghost {
+      color: var(--placeholder);
+      opacity: 0.75;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      margin: .65rem;
+      padding: .75rem .85rem;
+      min-height: calc(300px - 1.3rem);
+    }
     .rules-card { margin-bottom: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
     .rules-head { padding: .75rem 1rem; display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
     .rules-head h2 { margin: 0; font-size: .88rem; font-weight: 600; }
@@ -130,7 +148,13 @@
     .btn-danger { border-color: rgba(240,113,120,.45); color: var(--danger); background: rgba(240,113,120,.1); }
     .btn-danger:hover { background: rgba(240,113,120,.18); }
     .train-empty { padding: 2.5rem 1rem; text-align: center; color: var(--placeholder); font-size: .85rem; }
-    .train-badge { display: inline-block; font-size: .65rem; padding: .1rem .4rem; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
+    .train-file-list { display: flex; flex-wrap: wrap; gap: .45rem; margin-bottom: .75rem; }
+    .train-file-chip {
+      display: inline-flex; align-items: center; gap: .4rem; padding: .35rem .6rem;
+      border-radius: 8px; border: 1px solid var(--border); background: var(--surface-deep); font-size: .76rem;
+    }
+    .train-file-chip .cnt { color: var(--muted); font-size: .7rem; }
+    .train-file-chip .btn { padding: .15rem .4rem; font-size: .68rem; }
   </style>
 </head>
 <body>
@@ -172,7 +196,7 @@
         <button type="button" class="btn btn-success" id="btnCopyZh">复制中文</button>
         <button type="button" class="btn btn-success" id="btnCopyStd">复制英文字段</button>
         <button type="button" class="btn btn-success" id="btnCopyLit">复制英文直译</button>
-        <label class="toggle-row"><input type="checkbox" id="onlineSearch" /> 联网搜索补充（不写入词库）</label>
+        <label class="toggle-row"><input type="checkbox" id="onlineSearch" checked /> 词库未收录时联网翻译（不写入词库）</label>
         <span class="toolbar-hint">分隔符：换行 / 逗号 / 顿号 / 空格 / Tab</span>
       </div>
 
@@ -183,7 +207,7 @@
             <button type="button" class="btn col-copy" data-copy="zh">复制</button>
           </div>
           <div class="col-body">
-            <textarea id="inputText" placeholder="直接GMV，沉默评论用户数、详情页阅读时长 用户姓名&#10;是否删除"></textarea>
+            <textarea id="inputText" placeholder="什么值得买ID"></textarea>
           </div>
         </div>
         <div class="col-panel">
@@ -192,7 +216,7 @@
             <button type="button" class="btn col-copy" data-copy="std">复制</button>
           </div>
           <div class="col-body">
-            <div class="out-area std" id="outputStd" tabindex="0">输入后自动生成…</div>
+            <div class="out-area std ghost empty" id="outputStd" tabindex="0">smzdm_id</div>
           </div>
         </div>
         <div class="col-panel">
@@ -201,7 +225,7 @@
             <button type="button" class="btn col-copy" data-copy="lit">复制</button>
           </div>
           <div class="col-body">
-            <div class="out-area lit" id="outputLit" tabindex="0">输入后自动生成…</div>
+            <div class="out-area lit ghost empty" id="outputLit" tabindex="0">smzdm_id</div>
           </div>
         </div>
       </div>
@@ -229,11 +253,12 @@
           <span style="font-size:.75rem;color:var(--muted)" id="trainCount">0 条</span>
         </div>
         <div style="padding:1rem">
-          <label class="train-upload" id="trainUploadZone">
+          <div class="train-upload" id="trainUploadZone">
             <input type="file" id="trainFileInput" accept=".csv,.xlsx,.xls,.tsv" multiple />
             <strong>点击或拖拽上传 Excel / CSV</strong>
-            <span>两列即可：中文字段名 + 标准化英文字段名（自动识别列顺序，可有表头）</span>
-          </label>
+            <span>两列即可：中文字段名 + 标准化英文字段名（自动识别列顺序，括号内注释自动跳过）</span>
+          </div>
+          <div class="train-file-list" id="trainFileList"></div>
           <div class="train-toolbar">
             <input type="search" id="trainSearch" placeholder="搜索已导入的训练数据…" style="flex:1;min-width:180px;font-family:inherit;font-size:.82rem;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--border);background:var(--surface-deep);color:var(--text);outline:none" />
             <button type="button" class="btn btn-success" id="btnExportTrain">导出 CSV</button>
@@ -377,9 +402,11 @@
       "小黑屋":"small_black",
       "好价":"good_price","原创":"original_content",
       "爆料":"tip_off","晒物":"show_goods","众测":"crowd_test","问答":"qa",
-      "专题":"topic_page","榜单":"ranking_list","热搜":"hot_search","热词":"hot_word"
+      "专题":"topic_page","榜单":"ranking_list","热搜":"hot_search","热词":"hot_word",
+      "项目":"project"
     };
 
+    const DEMO_GHOST = { zh: "什么值得买ID", std: "smzdm_id", lit: "smzdm_id" };
     const VAGUE_EN = new Set(["name","id","type","status","code","num","cnt","amount","time","date"]);
     const EXAMPLES = [
       { zh:"直接GMV", en:"direct_gmv" }, { zh:"沉默评论用户数", en:"silent_comment_user_num" },
@@ -423,7 +450,11 @@
     }
 
     function getTrainingEn(zh) {
-      const e = trainingEntries.find(t => t.zh === zh);
+      const core = stripParenContent(zh);
+      const e = trainingEntries.find(t => {
+        const tCore = stripParenContent(t.zh);
+        return tCore === core || t.zh === zh;
+      });
       return e ? sanitizeEn(e.en) : null;
     }
 
@@ -493,6 +524,17 @@
     function splitFields(text) {
       if (!text || !text.trim()) return [];
       return text.split(/[\r\n,，、\t]+|\s+/).map(s => s.trim()).filter(Boolean);
+    }
+
+    /** 翻译/训练时跳过括号内注释：（备注）、(note)、【说明】等 */
+    function stripParenContent(text) {
+      return String(text ?? "").trim()
+        .replace(/\([^)]*\)/g, "")
+        .replace(/（[^）]*）/g, "")
+        .replace(/\[[^\]]*\]/g, "")
+        .replace(/【[^】]*】/g, "")
+        .replace(/\s+/g, "")
+        .trim();
     }
 
     function tokenizeInput(text) {
@@ -581,8 +623,9 @@
     function convertField(input) {
       const text = input.trim();
       if (!text) return null;
+      const coreText = stripParenContent(text) || text;
 
-      const tokens = tokenizeInput(text);
+      const tokens = tokenizeInput(coreText);
       const segments = [];
       for (const t of tokens) {
         if (t.type === "days") segments.push({ zh:t.raw, en:t.en, source:"dict" });
@@ -593,23 +636,28 @@
 
       const literal = buildFromSegments(segments);
       const trainingEn = getTrainingEn(text);
-      // 英文直译：仅分词拼接；英文字段：训练库优先，否则在直译基础上做标准化规则
       const standardized = trainingEn ?? applyNamingRules(literal);
       const pending = segments.filter(s => s.source === "pending");
       const fromTraining = !!trainingEn;
+      const skippedParen = coreText !== text;
       return {
-        input:text, literal, standardized, segments, pending, fromTraining,
-        warnings:validateField(standardized, text, pending, fromTraining),
+        input:text, coreText, literal, standardized, segments, pending, fromTraining, skippedParen,
+        warnings:validateField(standardized, text, pending, fromTraining, skippedParen),
         stats:{ dict:segments.filter(s=>s.source==="dict").length, pending:pending.length }
       };
     }
 
-    function validateField(en, zhInput, pending, fromTraining) {
+    function validateField(en, zhInput, pending, fromTraining, skippedParen) {
       const warnings = [];
+      if (skippedParen) warnings.push({ level:"info", msg:"已跳过括号内注释" });
       if (fromTraining) warnings.push({ level:"info", msg:"命中训练库" });
       if (pending.length) {
         const chunks = pending.map(s => `「${s.zh}」`).join("");
-        warnings.push({ level:"warn", msg:`词库未收录 ${chunks}，请补充词库或开启联网翻译` });
+        const onlineOn = document.getElementById("onlineSearch").checked;
+        warnings.push({
+          level: onlineOn ? "info" : "warn",
+          msg: onlineOn ? `词库未收录 ${chunks}，正在联网翻译…` : `词库未收录 ${chunks}，请开启联网翻译`
+        });
       }
       if (!en && pending.length) warnings.push({ level:"error", msg:"暂无法生成，待补充翻译" });
       if (en === "is_delete") warnings.push({ level:"warn", msg:"标准化建议 is_delete_flag；直译保持 is_delete" });
@@ -662,24 +710,37 @@
       return splitFields(document.getElementById("inputText").value).map(convertField).filter(Boolean);
     }
 
+    function isInputEmpty() {
+      return !document.getElementById("inputText").value.trim();
+    }
+
+    function renderGhostOutputs() {
+      lastResults = [];
+      const stdEl = document.getElementById("outputStd");
+      const litEl = document.getElementById("outputLit");
+      stdEl.textContent = DEMO_GHOST.std;
+      litEl.textContent = DEMO_GHOST.lit;
+      stdEl.classList.add("empty", "ghost");
+      litEl.classList.add("empty", "ghost");
+      document.getElementById("detailWrap").hidden = true;
+      document.getElementById("statTotal").textContent = "0";
+      document.getElementById("statHit").textContent = "0";
+      document.getElementById("statAuto").textContent = "0";
+      document.getElementById("statWarn").textContent = "0";
+    }
+
     function renderOutputs(results) {
       lastResults = results;
       const stdEl = document.getElementById("outputStd");
       const litEl = document.getElementById("outputLit");
 
       if (!results.length) {
-        stdEl.textContent = "输入后自动生成…";
-        litEl.textContent = "输入后自动生成…";
-        stdEl.classList.add("empty"); litEl.classList.add("empty");
-        document.getElementById("detailWrap").hidden = true;
-        document.getElementById("statTotal").textContent = "0";
-        document.getElementById("statHit").textContent = "0";
-        document.getElementById("statAuto").textContent = "0";
-        document.getElementById("statWarn").textContent = "0";
+        renderGhostOutputs();
         return;
       }
 
-      stdEl.classList.remove("empty"); litEl.classList.remove("empty");
+      stdEl.classList.remove("empty", "ghost");
+      litEl.classList.remove("empty", "ghost");
       stdEl.textContent = results.map(r => r.standardized || "—").join("\n");
       litEl.textContent = results.map(r => r.literal || "—").join("\n");
 
@@ -706,6 +767,10 @@
     }
 
     async function doConvert() {
+      if (isInputEmpty()) {
+        renderGhostOutputs();
+        return;
+      }
       const fields = splitFields(document.getElementById("inputText").value);
       let results = fields.map(convertField).filter(Boolean);
       renderOutputs(results);
@@ -892,12 +957,13 @@
       let skipped = 0;
       const dataRows = rows.filter(r => r.some(c => String(c ?? "").trim())).slice(cols.startRow);
       for (const row of dataRows) {
-        const zh = String(row[cols.zhCol] ?? "").trim();
+        const zhRaw = String(row[cols.zhCol] ?? "").trim();
+        const zh = stripParenContent(zhRaw);
         const en = normalizeFieldName(row[cols.enCol]);
         if (!zh || !en) { skipped++; continue; }
         if (!isChineseText(zh) && !/[\u4e00-\u9fff]/.test(zh)) { skipped++; continue; }
         if (!isFieldName(en)) { skipped++; continue; }
-        pairs.push({ zh, en });
+        pairs.push({ zh, en, zhRaw: zhRaw !== zh ? zhRaw : undefined });
       }
       return { pairs, skipped, cols };
     }
@@ -905,21 +971,24 @@
     function importTrainingPairs(pairs, fileName) {
       let added = 0, updated = 0;
       const now = new Date().toLocaleString("zh-CN", { hour12: false });
-      for (const { zh, en } of pairs) {
-        const idx = trainingEntries.findIndex(t => t.zh === zh);
+      for (const { zh, en, zhRaw } of pairs) {
+        const idx = trainingEntries.findIndex(t => stripParenContent(t.zh) === zh || t.zh === zh);
         if (idx >= 0) {
+          trainingEntries[idx].zh = zh;
           trainingEntries[idx].en = en;
+          trainingEntries[idx].zhRaw = zhRaw;
           trainingEntries[idx].fileName = fileName;
           trainingEntries[idx].updatedAt = now;
           updated++;
         } else {
-          trainingEntries.push({ id: genId(), zh, en, fileName, createdAt: now, updatedAt: now });
+          trainingEntries.push({ id: genId(), zh, en, zhRaw, fileName, createdAt: now, updatedAt: now });
           added++;
         }
       }
       saveTrainingEntries();
       rebuildKeywords();
       renderTrainingList();
+      renderTrainingFileList();
       renderKwGrid(document.getElementById("kwSearch").value);
       scheduleConvert();
       return { added, updated };
@@ -953,9 +1022,24 @@
       saveTrainingEntries();
       rebuildKeywords();
       renderTrainingList();
+      renderTrainingFileList();
       renderKwGrid(document.getElementById("kwSearch").value);
       scheduleConvert();
       showToast("已删除");
+    }
+
+    function deleteTrainingFile(fileName) {
+      const count = trainingEntries.filter(t => t.fileName === fileName).length;
+      if (!count) return;
+      if (!confirm(`确定删除文件「${fileName}」的全部 ${count} 条训练数据？`)) return;
+      trainingEntries = trainingEntries.filter(t => t.fileName !== fileName);
+      saveTrainingEntries();
+      rebuildKeywords();
+      renderTrainingList(document.getElementById("trainSearch").value);
+      renderTrainingFileList();
+      renderKwGrid(document.getElementById("kwSearch").value);
+      scheduleConvert();
+      showToast(`已删除文件「${fileName}」共 ${count} 条`);
     }
 
     function clearAllTraining() {
@@ -965,9 +1049,34 @@
       saveTrainingEntries();
       rebuildKeywords();
       renderTrainingList();
+      renderTrainingFileList();
       renderKwGrid(document.getElementById("kwSearch").value);
       scheduleConvert();
       showToast("已清空训练数据");
+    }
+
+    function renderTrainingFileList() {
+      const wrap = document.getElementById("trainFileList");
+      const fileMap = new Map();
+      for (const e of trainingEntries) {
+        const fn = e.fileName || "未知来源";
+        fileMap.set(fn, (fileMap.get(fn) || 0) + 1);
+      }
+      if (!fileMap.size) {
+        wrap.innerHTML = "";
+        return;
+      }
+      const files = [...fileMap.keys()];
+      wrap.innerHTML = files.map((fn, i) => `
+        <div class="train-file-chip">
+          <span>${esc(fn)}</span>
+          <span class="cnt">${fileMap.get(fn)} 条</span>
+          <button type="button" class="btn btn-danger" data-file-idx="${i}">删除文件</button>
+        </div>
+      `).join("");
+      wrap.querySelectorAll("[data-file-idx]").forEach(btn => {
+        btn.addEventListener("click", () => deleteTrainingFile(files[+btn.dataset.fileIdx]));
+      });
     }
 
     function renderTrainingList(filter = "") {
@@ -985,7 +1094,7 @@
 
       body.innerHTML = list.map(e => `
         <tr data-id="${esc(e.id)}">
-          <td>${esc(e.zh)}</td>
+          <td>${esc(e.zhRaw || e.zh)}${e.zhRaw ? `<div class="train-meta">有效：${esc(e.zh)}</div>` : ""}</td>
           <td><span class="train-en">${esc(e.en)}</span></td>
           <td><span class="train-meta">${esc(e.fileName || "—")}</span></td>
           <td><span class="train-meta">${esc(e.updatedAt || e.createdAt || "—")}</span></td>
@@ -1060,7 +1169,7 @@
 
     document.getElementById("btnClear").addEventListener("click", () => {
       document.getElementById("inputText").value = "";
-      renderOutputs([]);
+      renderGhostOutputs();
     });
 
     document.getElementById("btnCopyAll").addEventListener("click", () => copyText(getCopyText("all")));
@@ -1116,7 +1225,10 @@
 
     const trainZone = document.getElementById("trainUploadZone");
     const trainInput = document.getElementById("trainFileInput");
-    trainZone.addEventListener("click", () => trainInput.click());
+    trainZone.addEventListener("click", (e) => {
+      if (e.target === trainInput) return;
+      trainInput.click();
+    });
     trainZone.addEventListener("dragover", e => { e.preventDefault(); trainZone.classList.add("dragover"); });
     trainZone.addEventListener("dragleave", () => trainZone.classList.remove("dragover"));
     trainZone.addEventListener("drop", e => {
@@ -1124,7 +1236,8 @@
       if (e.dataTransfer?.files?.length) handleTrainingFiles([...e.dataTransfer.files]);
     });
     trainInput.addEventListener("change", e => {
-      if (e.target.files?.length) handleTrainingFiles([...e.target.files]);
+      const files = e.target.files;
+      if (files?.length) handleTrainingFiles([...files]);
       e.target.value = "";
     });
     document.getElementById("trainSearch").addEventListener("input", e => renderTrainingList(e.target.value));
@@ -1147,9 +1260,9 @@
     }).finally(() => {
       renderKwGrid();
       renderTrainingList();
+      renderTrainingFileList();
       if (window.__kwPurgedOnUpgrade) showToast("已自动清除历史脏数据，恢复内置词库");
-      document.getElementById("inputText").value = "什么值得买ID\n是否小黑屋\n是否删除";
-      doConvert();
+      renderGhostOutputs();
     });
   </script>
 </body>
