@@ -103,10 +103,15 @@
     .kw-search { display: flex; gap: .5rem; margin-bottom: 1rem; }
     .kw-search input { flex: 1; font-family: inherit; font-size: .85rem; padding: .5rem .75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-deep); color: var(--text); outline: none; }
     .kw-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(220px,1fr)); gap: .5rem; max-height: 420px; overflow-y: auto; }
-    .kw-item { padding: .5rem .65rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-deep); font-size: .76rem; }
-    .kw-item strong { display: block; }
+    .kw-item { position: relative; padding: .5rem .65rem  .5rem .65rem; padding-right: 2.8rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-deep); font-size: .76rem; }
+    .kw-item strong { display: block; padding-right: .25rem; }
     .kw-item span { font-family: var(--mono); color: var(--positive); font-size: .72rem; }
     .kw-item .src { font-size: .65rem; color: var(--muted); }
+    .kw-actions { position: absolute; top: .3rem; right: .35rem; display: flex; gap: .15rem; }
+    .kw-act { border: none; background: var(--surface); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: .68rem; line-height: 1; padding: .2rem .35rem; color: var(--muted); }
+    .kw-act:hover { color: var(--text); background: var(--surface-hover); }
+    .kw-act.del:hover { color: var(--danger); border-color: rgba(240,113,120,.45); }
+    .seg-tag.train { border-color: var(--accent); color: var(--accent); }
     .import-box { margin-top: 1rem; padding: 1rem; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--surface-deep); font-size: .8rem; color: var(--muted); }
     .import-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .6rem; }
     .import-actions input[type=file] { display: none; }
@@ -442,6 +447,7 @@
     let customKw = {};
     let sessionKw = {};
     let trainingEntries = [];
+    let trainingDerivedKw = {};
     let keywords = {};
     let lastResults = [];
     let convertTimer = null;
@@ -461,8 +467,74 @@
 
     function rebuildKeywords() {
       keywords = { ...BUILTIN_KEYWORDS, ...customKw, ...sessionKw };
-      for (const e of trainingEntries) {
-        if (e.zh && e.en) keywords[e.zh] = e.en;
+      rebuildTrainingDerivedKw();
+    }
+
+    /** 字段转换用词库 = 内置 + 导入 + 训练推导 + 临时联网 */
+    function getSegmentDict() {
+      return { ...BUILTIN_KEYWORDS, ...customKw, ...trainingDerivedKw, ...sessionKw };
+    }
+
+    function getDisplayKeywords() {
+      return { ...BUILTIN_KEYWORDS, ...customKw };
+    }
+
+    function tryFullSegment(text, dict) {
+      const segments = [];
+      let i = 0;
+      while (i < text.length) {
+        let matched = false;
+        for (let len = Math.min(16, text.length - i); len >= 1; len--) {
+          const sub = text.slice(i, i + len);
+          if (dict[sub] !== undefined && dict[sub] !== "") {
+            segments.push({ zh: sub, en: dict[sub] });
+            i += len;
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) return null;
+      }
+      return segments;
+    }
+
+    /** 从训练对 (中文, 英文字段) 反推子词映射，供字段转换分词使用 */
+    function alignPairToMappings(zh, en, out, dict) {
+      const parts = sanitizeEn(en).split("_").filter(Boolean);
+      let rem = zh;
+      for (let p = parts.length - 1; p >= 0; p--) {
+        const part = parts[p];
+        let best = null;
+        const known = Object.keys(dict).filter(k => dict[k] === part && rem.endsWith(k)).sort((a, b) => b.length - a.length);
+        if (known.length) { best = known[0]; }
+        else {
+          for (let len = Math.min(rem.length, 16); len >= 1; len--) {
+            const sub = rem.slice(-len);
+            if (/[\u4e00-\u9fff]/.test(sub) || /^ID$/i.test(sub)) { best = sub; break; }
+          }
+        }
+        if (!best) return;
+        out[best] = part;
+        rem = rem.slice(0, -best.length);
+      }
+    }
+
+    function rebuildTrainingDerivedKw() {
+      trainingDerivedKw = {};
+      for (let pass = 0; pass < 3; pass++) {
+        for (const e of trainingEntries) {
+          if (!e.zh || !e.en) continue;
+          const core = stripParenContent(e.zh);
+          const target = sanitizeEn(e.en);
+          if (!core || !target) continue;
+          const dict = { ...BUILTIN_KEYWORDS, ...customKw, ...trainingDerivedKw };
+          const segs = tryFullSegment(core, dict);
+          if (segs && sanitizeEn(segs.map(s => s.en).join("_")) === target) {
+            segs.forEach(s => { trainingDerivedKw[s.zh] = s.en; });
+            continue;
+          }
+          alignPairToMappings(core, target, trainingDerivedKw, dict);
+        }
       }
     }
 
@@ -476,7 +548,13 @@
     }
 
     function isTrainingEntry(zh) {
-      return trainingEntries.some(t => t.zh === zh);
+      return trainingEntries.some(t => stripParenContent(t.zh) === zh || t.zh === zh);
+    }
+
+    function segmentSource(zh) {
+      if (sessionKw[zh] !== undefined) return "online";
+      if (trainingDerivedKw[zh] !== undefined && customKw[zh] === undefined && BUILTIN_KEYWORDS[zh] === undefined) return "train";
+      return "dict";
     }
 
     function isDirtyEn(en) {
@@ -615,32 +693,36 @@
     }
 
     function hasDictMatch(text, start, maxLen) {
+      const dict = getSegmentDict();
       for (let len = Math.min(maxLen, text.length - start); len >= 1; len--) {
-        if (keywords[text.slice(start, start + len)] !== undefined) return true;
+        if (dict[text.slice(start, start + len)] !== undefined) return true;
       }
       return false;
     }
 
     function matchEnglish(raw) {
-      if (keywords[raw] !== undefined) return { zh:raw, en:keywords[raw], source:"dict" };
+      const dict = getSegmentDict();
+      if (dict[raw] !== undefined) return { zh:raw, en:dict[raw], source: segmentSource(raw) };
       const upper = raw.toUpperCase();
       const lower = raw.toLowerCase();
-      if (keywords[upper] !== undefined) return { zh:upper, en:keywords[upper], source:"dict" };
-      if (keywords[lower] !== undefined) return { zh:lower, en:keywords[lower], source:"dict" };
+      if (dict[upper] !== undefined) return { zh:upper, en:dict[upper], source: segmentSource(upper) };
+      if (dict[lower] !== undefined) return { zh:lower, en:dict[lower], source: segmentSource(lower) };
       if (/^[A-Z0-9]+$/.test(raw)) return { zh:raw, en:lower, source:"dict" };
       return { zh:raw, en:lower, source:"dict" };
     }
 
     /** 仅做词库最长匹配分词，未命中整段保留待补充，绝不逐字硬译 */
     function segmentChinese(text) {
+      const dict = getSegmentDict();
       const segments = [];
       let i = 0;
       while (i < text.length) {
         let matched = false;
         for (let len = Math.min(16, text.length - i); len >= 1; len--) {
           const sub = text.slice(i, i + len);
-          if (keywords[sub] !== undefined) {
-            segments.push({ zh:sub, en:keywords[sub], source:"dict" });
+          if (dict[sub] !== undefined) {
+            const src = segmentSource(sub);
+            segments.push({ zh:sub, en:dict[sub], source: src === "train" ? "train" : "dict" });
             i += len;
             matched = true;
             break;
@@ -719,7 +801,7 @@
       return {
         input:text, coreText, literal, standardized, segments, pending, fromTraining, skippedParen,
         warnings:validateField(standardized, text, pending, fromTraining, skippedParen),
-        stats:{ dict:segments.filter(s=>s.source==="dict").length, pending:pending.length }
+        stats:{ dict:segments.filter(s=>s.source==="dict"||s.source==="train").length, pending:pending.length }
       };
     }
 
@@ -727,6 +809,9 @@
       const warnings = [];
       if (skippedParen) warnings.push({ level:"info", msg:`已跳过括号内内容，有效字段名：${stripParenContent(zhInput)}` });
       if (fromTraining) warnings.push({ level:"info", msg:"命中训练库" });
+      else if (pending.length === 0 && segments.some(s => s.source === "train")) {
+        warnings.push({ level:"info", msg:"命中训练推导子词" });
+      }
       if (pending.length) {
         const chunks = pending.map(s => `「${s.zh}」`).join("");
         const onlineOn = document.getElementById("onlineSearch").checked;
@@ -899,7 +984,7 @@
         pending += r.stats?.pending || 0;
         if (r.warnings?.length) warns++;
         const segHtml = r.segments.map(s =>
-          `<span class="seg-tag${s.source==="pending"?" unmatched":""}${s.source==="online"?" online":""}">${esc(s.zh)}→${esc(s.en ?? "待补充")}</span>`
+          `<span class="seg-tag${s.source==="pending"?" unmatched":""}${s.source==="online"?" online":""}${s.source==="train"?" train":""}">${esc(s.zh)}→${esc(s.en ?? "待补充")}</span>`
         ).join("");
         const warnHtml = r.warnings?.map(w => `<div class="warn-txt">${esc(w.msg)}</div>`).join("") || "✓";
         const tr = document.createElement("tr");
@@ -963,17 +1048,50 @@
     function renderKwGrid(filter = "") {
       const grid = document.getElementById("kwGrid");
       const q = filter.trim().toLowerCase();
-      const entries = Object.entries(keywords).filter(([zh, en]) =>
+      const displayKw = getDisplayKeywords();
+      const entries = Object.entries(displayKw).filter(([zh, en]) =>
         !q || zh.includes(filter.trim()) || (en && en.toLowerCase().includes(q))
       ).sort((a, b) => b[0].length - a[0].length);
-      document.getElementById("kwCount").textContent = `${Object.keys(keywords).length} 条（显示 ${entries.length} 条）`;
+      document.getElementById("kwCount").textContent = `${Object.keys(displayKw).length} 条（显示 ${entries.length} 条）`;
       grid.innerHTML = entries.slice(0, 600).map(([zh, en]) => {
-        let src = "内置";
-        if (isTrainingEntry(zh)) src = "训练";
-        else if (customKw[zh] !== undefined) src = "导入";
-        else if (sessionKw[zh] !== undefined) src = "临时";
-        return `<div class="kw-item"><strong>${esc(zh)}</strong><span>${esc(en || "(空)")}</span><div class="src">${src}</div></div>`;
+        const src = customKw[zh] !== undefined ? "导入" : "内置";
+        const canDelete = customKw[zh] !== undefined;
+        const actions = `<div class="kw-actions">
+          <button type="button" class="kw-act" data-kw-edit="${encodeURIComponent(zh)}" title="编辑">✎</button>
+          ${canDelete ? `<button type="button" class="kw-act del" data-kw-del="${encodeURIComponent(zh)}" title="删除">×</button>` : ""}
+        </div>`;
+        return `<div class="kw-item"><strong>${esc(zh)}</strong><span>${esc(en || "(空)")}</span><div class="src">${src}</div>${actions}</div>`;
       }).join("") || '<div style="padding:1rem;color:var(--placeholder)">无匹配</div>';
+    }
+
+    function editKeyword(zh) {
+      const displayKw = getDisplayKeywords();
+      const curEn = displayKw[zh] || "";
+      const newZh = prompt("中文词条", zh);
+      if (newZh === null) return;
+      const newEn = prompt("英文词条", curEn);
+      if (newEn === null) return;
+      const z = newZh.trim();
+      const e = normalizeFieldName(newEn);
+      if (!z || !e || !isChineseText(z) || !isFieldName(e)) { showToast("词条格式无效"); return; }
+      if (z !== zh && customKw[zh] !== undefined) delete customKw[zh];
+      customKw[z] = e;
+      saveCustomKeywords();
+      rebuildKeywords();
+      renderKwGrid(document.getElementById("kwSearch").value);
+      scheduleConvert();
+      showToast(`已更新：${z} → ${e}`);
+    }
+
+    function deleteKeyword(zh) {
+      if (customKw[zh] === undefined) { showToast("内置词条不可删除"); return; }
+      if (!confirm(`确定删除词条「${zh}」？`)) return;
+      delete customKw[zh];
+      saveCustomKeywords();
+      rebuildKeywords();
+      renderKwGrid(document.getElementById("kwSearch").value);
+      scheduleConvert();
+      showToast("已删除词条");
     }
 
     function mergeKeywords(data, silent) {
@@ -1421,6 +1539,12 @@
     });
 
     document.getElementById("kwSearch").addEventListener("input", e => renderKwGrid(e.target.value));
+    document.getElementById("kwGrid").addEventListener("click", e => {
+      const editBtn = e.target.closest("[data-kw-edit]");
+      const delBtn = e.target.closest("[data-kw-del]");
+      if (editBtn) editKeyword(decodeURIComponent(editBtn.dataset.kwEdit));
+      if (delBtn) deleteKeyword(decodeURIComponent(delBtn.dataset.kwDel));
+    });
     document.getElementById("btnKwReset").addEventListener("click", () => {
       document.getElementById("kwSearch").value = ""; renderKwGrid();
     });
