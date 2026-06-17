@@ -183,10 +183,9 @@
     <div class="tool-panel active" id="panel-convert">
       <div class="toolbar">
         <button type="button" class="btn" id="btnClear">清空</button>
-        <button type="button" class="btn btn-success" id="btnCopyAll">复制全部（中文+英文字段+直译）</button>
-        <button type="button" class="btn btn-success" id="btnCopyZh">复制中文</button>
+        <button type="button" class="btn btn-success" id="btnCopyAll">复制 中文+英文字段</button>
+        <button type="button" class="btn btn-success" id="btnCopyZh">复制中文字段</button>
         <button type="button" class="btn btn-success" id="btnCopyStd">复制英文字段</button>
-        <button type="button" class="btn btn-success" id="btnCopyLit">复制英文直译</button>
         <label class="toggle-row"><input type="checkbox" id="onlineSearch" checked /> 词库未收录时联网翻译（不写入词库）</label>
         <span class="toolbar-hint">分隔符：换行 / 逗号 / 顿号 / 空格 / Tab</span>
       </div>
@@ -876,7 +875,7 @@
       if (type === "std") return lastResults.map(r => r.standardized).join("\n");
       if (type === "lit") return lastResults.map(r => r.literal).join("\n");
       if (type === "all") {
-        return lastResults.map(r => `${r.input}\t${r.standardized}\t${r.literal}`).join("\n");
+        return lastResults.map(r => `${r.input}\t${r.standardized}`).join("\n");
       }
       return "";
     }
@@ -1246,7 +1245,6 @@
     document.getElementById("btnCopyAll").addEventListener("click", () => copyText(getCopyText("all")));
     document.getElementById("btnCopyZh").addEventListener("click", () => copyText(getCopyText("zh")));
     document.getElementById("btnCopyStd").addEventListener("click", () => copyText(getCopyText("std")));
-    document.getElementById("btnCopyLit").addEventListener("click", () => copyText(getCopyText("lit")));
 
     document.querySelectorAll(".col-copy").forEach(btn => {
       btn.addEventListener("click", () => copyText(getCopyText(btn.dataset.copy)));
