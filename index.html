@@ -183,9 +183,8 @@
     <div class="tool-panel active" id="panel-convert">
       <div class="toolbar">
         <button type="button" class="btn" id="btnClear">清空</button>
-        <button type="button" class="btn btn-success" id="btnCopyAll">复制 中文+英文字段</button>
-        <button type="button" class="btn btn-success" id="btnCopyZh">复制中文字段</button>
-        <button type="button" class="btn btn-success" id="btnCopyStd">复制英文字段</button>
+        <button type="button" class="btn btn-success" id="btnCopyZhStd">复制 中文+英文字段</button>
+        <button type="button" class="btn btn-success" id="btnCopyFull">复制全部</button>
         <label class="toggle-row"><input type="checkbox" id="onlineSearch" checked /> 词库未收录时联网翻译（不写入词库）</label>
         <span class="toolbar-hint">分隔符：换行 / 逗号 / 顿号 / 空格 / Tab</span>
       </div>
@@ -666,8 +665,10 @@
       }
 
       const trainingEn = getTrainingEn(text);
-      const standardized = trainingEn ?? applyNamingRules(buildFromSegments(segments));
-      const literal = buildLiteralFromSegments(segments);
+      let standardized = trainingEn ?? applyNamingRules(buildFromSegments(segments));
+      let literal = buildLiteralFromSegments(segments);
+      if (!trainingEn && hasIdSuffix(coreText)) standardized = ensureOnlineIdSuffix(coreText, standardized);
+      if (hasIdSuffix(coreText)) literal = ensureOnlineLiteralIdSuffix(coreText, literal);
       const pending = segments.filter(s => s.source === "pending");
       const fromTraining = !!trainingEn;
       const skippedParen = coreText !== text;
@@ -698,6 +699,26 @@
       return warnings;
     }
 
+    function hasIdSuffix(zh) {
+      return /(?:ID|id|Id|号)$/.test(String(zh ?? "").trim());
+    }
+
+    /** 联网翻译后：xxID / xx号 类字段自动补 _id */
+    function ensureOnlineIdSuffix(zh, en) {
+      if (!en || !hasIdSuffix(zh)) return en;
+      let s = sanitizeEn(en).replace(/_(number|num|no|code)$/i, "");
+      if (!/_id$/i.test(s)) s = s ? `${s}_id` : "id";
+      return s;
+    }
+
+    /** 英文直译列：xxID / xx号 自动补 id（空格分隔） */
+    function ensureOnlineLiteralIdSuffix(zh, en) {
+      if (!en || !hasIdSuffix(zh)) return en;
+      let s = String(en).toLowerCase().replace(/\b(number|num|no|code)\b$/i, "").trim();
+      if (!/\bid\b/i.test(s)) s = s ? `${s} id` : "id";
+      return s.replace(/\s+/g, " ").trim();
+    }
+
     async function fetchOnlineTranslation(zh) {
       if (onlineCache.has(zh)) return onlineCache.get(zh);
       try {
@@ -705,8 +726,9 @@
         const res = await fetch(url);
         const data = await res.json();
         if (data.responseData?.translatedText) {
-          const en = data.responseData.translatedText.toLowerCase()
+          let en = data.responseData.translatedText.toLowerCase()
             .replace(/[^a-z0-9]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+          en = ensureOnlineIdSuffix(zh, en);
           if (en && en !== zh.toLowerCase()) {
             onlineCache.set(zh, en);
             return en;
@@ -724,8 +746,9 @@
         const res = await fetch(url);
         const data = await res.json();
         if (data.responseData?.translatedText) {
-          const en = data.responseData.translatedText.toLowerCase()
+          let en = data.responseData.translatedText.toLowerCase()
             .replace(/_/g, " ").replace(/\s+/g, " ").trim();
+          en = ensureOnlineLiteralIdSuffix(zh, en);
           if (en && en !== zh.toLowerCase()) {
             onlineCache.set(cacheKey, en);
             return en;
@@ -874,8 +897,11 @@
       if (type === "zh") return lastResults.map(r => r.input).join("\n");
       if (type === "std") return lastResults.map(r => r.standardized).join("\n");
       if (type === "lit") return lastResults.map(r => r.literal).join("\n");
-      if (type === "all") {
+      if (type === "zh_std") {
         return lastResults.map(r => `${r.input}\t${r.standardized}`).join("\n");
+      }
+      if (type === "full") {
+        return lastResults.map(r => `${r.input}\t${r.standardized}\t${r.literal}`).join("\n");
       }
       return "";
     }
@@ -1242,9 +1268,8 @@
       renderGhostOutputs();
     });
 
-    document.getElementById("btnCopyAll").addEventListener("click", () => copyText(getCopyText("all")));
-    document.getElementById("btnCopyZh").addEventListener("click", () => copyText(getCopyText("zh")));
-    document.getElementById("btnCopyStd").addEventListener("click", () => copyText(getCopyText("std")));
+    document.getElementById("btnCopyZhStd").addEventListener("click", () => copyText(getCopyText("zh_std")));
+    document.getElementById("btnCopyFull").addEventListener("click", () => copyText(getCopyText("full")));
 
     document.querySelectorAll(".col-copy").forEach(btn => {
       btn.addEventListener("click", () => copyText(getCopyText(btn.dataset.copy)));
