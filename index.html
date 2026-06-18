@@ -800,12 +800,12 @@
       const skippedParen = coreText !== text;
       return {
         input:text, coreText, literal, standardized, segments, pending, fromTraining, skippedParen,
-        warnings:validateField(standardized, text, pending, fromTraining, skippedParen),
+        warnings:validateField(standardized, text, pending, fromTraining, skippedParen, segments),
         stats:{ dict:segments.filter(s=>s.source==="dict"||s.source==="train").length, pending:pending.length }
       };
     }
 
-    function validateField(en, zhInput, pending, fromTraining, skippedParen) {
+    function validateField(en, zhInput, pending, fromTraining, skippedParen, segments) {
       const warnings = [];
       if (skippedParen) warnings.push({ level:"info", msg:`已跳过括号内内容，有效字段名：${stripParenContent(zhInput)}` });
       if (fromTraining) warnings.push({ level:"info", msg:"命中训练库" });
@@ -1003,11 +1003,16 @@
         renderGhostOutputs();
         return;
       }
-      const fields = splitFields(document.getElementById("inputText").value);
-      let results = fields.map(convertField).filter(Boolean);
-      renderOutputs(results);
-      results = await supplementOnline(results);
-      if (results !== lastResults) renderOutputs(results);
+      try {
+        const fields = splitFields(document.getElementById("inputText").value);
+        let results = fields.map(convertField).filter(Boolean);
+        renderOutputs(results);
+        results = await supplementOnline(results);
+        if (results !== lastResults) renderOutputs(results);
+      } catch (err) {
+        console.error(err);
+        showToast("转换出错，请刷新页面重试");
+      }
     }
 
     function scheduleConvert() {
